@@ -31,9 +31,9 @@
 begin:      br    start
 
             db    8+80h
-            db    12
+            db    13
             dw    2025
-            dw    1
+            dw    2
 
             db    'See github/dmadole/MiniDOS-dzx0 for more information',0
 
@@ -190,137 +190,13 @@ endargs:    ldi   fildes.1              ; pointer to file descriptor
             ldi   end.0
             plo   rd
 
-          ; The basic algorithm is that from Einar Saukas's standard Z80 ZX0
-          ; decompressor, but is completely rewriten due to how different the
-          ; 1802 instruction set and architecture is. For a full description
-          ; of the ZX0 compression format, see the repository here:
-          ;
-          ;   https://github.com/einar-saukas/ZX0
-          ;
-          ; While the decompression algorithm is reasonably simple, the
-          ; compression size is complex and expensive. It would run slowly
-          ; on the 1802 and take considerably more work to implement.
-
-decompr:    ldi   %10000000             ; empty the elias shift register
-            plo   r7
-
-            shl                         ; zero the block length counter
-            phi   rc
-            plo   rc
-
-            phi   rb                    ; default block copy offset is -1
-            plo   rb
-            dec   rb
-
-          ; The first block in a stream is always a literal block so the type
-          ; bit is not even sent, and we can jump in right at that point. We
-          ; just get the block length and copy from source to destination.
-          ;
-          ; Note that the first bit of an Elias coded number is implied, so
-          ; we need to preset the lowest bit pefore getting the rest. Since
-          ; RC will always be zero on entry, this can be done with INC only.
-
-literal:    inc   rc                    ; get the length of the block
             sep   scall
-            dw    elictrl
+            dw    decompr
 
-copylit:    lda   rf                    ; copy byte from source data
-            str   rd
-            inc   rd
+          ; When decompression is complete, get the size of the output data
+          ; by subtracting the start of the buffer from the last address.
 
-            dec   rc                    ; loop until all bytes copied
-            glo   rc
-            lbnz  copylit
-            ghi   rc
-            lbnz  copylit
-
-          ; A literal is always followed by a copy block. The next input bit 
-          ; indicates if is from a new offset or the same offset as last.
-
-            glo   r7                    ; get next bit from input stream
-            shl
-            plo   r7
-
-            lbdf  newoffs               ; new offset follows if bit is set
-
-          ; Process a copy block by getting the block length and copying from
-          ; the output buffer from where the offset points backwards to. Note
-          ; that the offset is negative, so we add it to go backwards.
-
-            inc   rc                    ; same offset so just get length
-            sep   scall
-            dw    elictrl
-
-copyblk:    glo   rb                    ; offset plus position is source
-            str   r2
-            glo   rd
-            add
-            plo   r9
-            ghi   rb
-            str   r2
-            ghi   rd
-            adc
-            phi   r9
-
-copyoff:    lda   r9                     ; copy byte from source data
-            str   rd
-            inc   rd
-
-            dec   rc                     ; loop until all bytes copied
-            glo   rc
-            lbnz  copyoff
-            ghi   rc
-            lbnz  copyoff
-
-          ; After a copy from same offset, the next block must be either a
-          ; literal or a copy from new offset, the next bit indicates which.
-
-            glo   r7                     ; check if literal next
-            shl
-            plo   r7
-
-            lbnf  literal                ; literal block follows if bit clear
-
-          ; The next block is to be copied from a new offset. The value is
-          ; stored in two parts, the high bits are Elias-coded, but the low
-          ; 7 bits are not and are stored left-aligned in a byte. The lowest
-          ; bit of that byte is used to hold the first bit of the length.
-          ;
-          ; Since the first bit of the Elias part is implied and a negative
-          ; number, we need to preload the value with all ones plus a zero
-          ; bit. This can be done by DEC, DEC from the starting zero value.
-
-newoffs:    dec   rc                     ; negative value so set to 11111110
-            dec   rc
-
-            sep   scall                  ; get the elias-coded offset value
-            dw    elictrl
-
-            inc   rc                     ; adjust and test for end of file
-            glo   rc
-            lbz   endfile
-
-            shrc                         ; shift and combine with low byte
-            phi   rb
-            lda   rf
-            shrc
-            plo   rb
-
-            ldi   0                      ; clear since length is positive
-            phi   rc
-            plo   rc
-
-            inc   rc                     ; get length of the copy block
-            sep   scall
-            dw    elitest
-
-            inc   rc                     ; adjust offset and copy the block
-            lbr   copyblk
-
-          ; When decompression is complete, get the size of the outpu data
-          ; but subtracting the start of the buffer from the last address.
-
-endfile:    glo   rd                     ; subtract pointer from start
+            glo   rd                     ; subtract pointer from start
             smi   end.0
             plo   rc
             plo   rd
@@ -399,6 +275,182 @@ endfile:    glo   rd                     ; subtract pointer from start
 
             sep   sret                  ; return to caller
 
+
+          ; The basic algorithm is that from Einar Saukas's standard Z80 ZX0
+          ; decompressor, but is completely rewriten due to how different the
+          ; 1802 instruction set and architecture is. For a full description
+          ; of the ZX0 compression format, see the repository here:
+          ;
+          ;   https://github.com/einar-saukas/ZX0
+          ;
+          ; While the decompression algorithm is reasonably simple, the
+          ; compression size is complex and expensive. It would run slowly
+          ; on the 1802 and take considerably more work to implement.
+
+decompr:    ldi   %10000000             ; empty the elias shift register
+            plo   r7
+
+            shl                         ; zero the block length counter
+            phi   rc
+            plo   rc
+
+            phi   rb                    ; default block copy offset is -1
+            plo   rb
+            dec   rb
+
+          ; The first block in a stream is always a literal block so the type
+          ; bit is not even sent, and we can jump in right at that point. We
+          ; just get the block length and copy from source to destination.
+          ;
+          ; Note that the first bit of an Elias coded number is implied, so
+          ; we need to preset the lowest bit pefore getting the rest. Since
+          ; RC will always be zero on entry, this can be done with INC only.
+
+literal:    glo   r3                    ; get the length of the block
+            br    eliread
+
+copylit:    lda   rf                    ; copy byte from source data
+            str   rd
+            inc   rd
+
+            dec   rc                    ; loop until all bytes copied
+            glo   rc
+            bnz   copylit
+            ghi   rc
+            bnz   copylit
+
+          ; A literal is always followed by a copy block. The next input bit 
+          ; indicates if is from a new offset or the same offset as last.
+
+            glo   r7                    ; get next bit from input stream
+            shl
+            plo   r7
+
+            bdf   newoffs               ; new offset follows if bit is set
+
+          ; Process a copy block by getting the block length and copying from
+          ; the output buffer from where the offset points backwards to. Note
+          ; that the offset is negative, so we add it to go backwards.
+
+            glo   r3                    ; same offset so just get length
+            br    eliread
+
+copyblk:    glo   rb                    ; offset plus position is source
+            str   r2
+            glo   rd
+            add
+            plo   r9
+            ghi   rb
+            str   r2
+            ghi   rd
+            adc
+            phi   r9
+
+copyoff:    lda   r9                     ; copy byte from source data
+            str   rd
+            inc   rd
+
+            dec   rc                     ; loop until all bytes copied
+            glo   rc
+            bnz   copyoff
+            ghi   rc
+            bnz   copyoff
+
+          ; After a copy from same offset, the next block must be either a
+          ; literal or a copy from new offset, the next bit indicates which.
+
+            glo   r7                     ; check if literal next
+            shl
+            plo   r7
+
+            bnf   literal                ; literal block follows if bit clear
+
+          ; The next block is to be copied from a new offset. The value is
+          ; stored in two parts, the high bits are Elias-coded, but the low
+          ; 7 bits are not and are stored left-aligned in a byte. The lowest
+          ; bit of that byte is used to hold the first bit of the length.
+          ;
+          ; Since the first bit of the Elias part is implied and a negative
+          ; number, we need to preload the value with all ones plus a zero
+          ; bit. This can be done by DEC, DEC from the starting zero value.
+
+newoffs:    dec   rc                     ; negative value so set to 11111110
+            dec   rc
+
+            glo   r3                     ; get the elias-coded offset value
+            br    elictrl
+
+            inc   rc                     ; adjust and test for end of file
+            glo   rc
+            bz    endfile
+
+            shrc                         ; shift and combine with low byte
+            phi   rb
+            lda   rf
+            shrc
+            plo   rb
+
+            ldi   0                      ; clear since length is positive
+            phi   rc
+            plo   rc
+            inc   rc
+
+            glo   r3                     ; get length of the copy block
+            bnf   elidata
+
+            inc   rc                     ; adjust offset and copy the block
+            br    copyblk
+
+endfile:    sep   sret
+
+          ; Subroutine to read an interlaced Elias gamma coded number from
+          ; the bit input stream. This keeps a one-byte buffer in R7.0 and
+          ; reads from the input pointed to by RF as needed, returning the
+          ; resulting decoded number in RC.
+          ;
+          ; Note that this is short-subroutine called by jumping to the 
+          ; subroutine with a BR instruction and passing the return address
+          ; in D. This only works within the same page of code but is fast.
+
+eliread:    inc   rc                    ; set lowest bit (already zeroed)
+
+elictrl:    plo   re                    ; stash return address for later
+            br    eliloop
+
+elidata:    plo   re                    ; stash return address for later
+
+            glo   r7                    ; get next data bit from buffer
+elicont:    shl
+            plo   r7
+
+            glo   rc                    ; shift new data bit into result
+            shlc
+            plo   rc
+            ghi   rc
+            shlc
+            phi   rc
+
+eliloop:    glo   r7                    ; get next control bit from buffer
+            shl
+
+            lsnz                        ; get next byte if buffer is empty
+            lda   rf
+            shlc
+
+            bnf   elicont               ; loop if not the stop control bit
+
+            plo   r7                    ; save bit buffer back to register
+
+            inc   re                    ; adjust address and return (keep df)
+            inc   re
+            glo   re
+            plo   r3
+
+         #if decompr.1 != $.1
+         #error decompressor code spans page boundary
+         #endif
+
+
           ; Strings and buffers used for creating the output status message.
 
 status1:    db    'File expanded from '
@@ -408,37 +460,6 @@ status2:    db    ' to '
 outsize:    db    0,0,0,0,0,0
 
 status3:    db    ' bytes.',13,10,0
-
-          ; Subroutine to read an interlaced Elias gamma coded number from
-          ; the bit input stream. This keeps a one-byte buffer in R7.0 and
-          ; reads from the input pointed to by RF as needed, returning the
-          ; resulting decoded number in RC.
-
-elidata:    glo   r7
-            shl                         ; get a data bit from buffer
-            plo   r7
-
-            glo   rc                    ; shift data bit into result
-            shlc
-            plo   rc
-            ghi   rc
-            shlc
-            phi   rc
-
-elictrl:    glo   r7                    ; get control bit from buffer
-            shl
-            plo   r7
-
-            lbnz  elitest               ; if buffer is not empty
-
-            lda   rf                    ; else get another byte
-            shlc
-            plo   r7
-
-elitest:    lbnf  elidata               ; if bit is zero then end
-
-            sep   sret
-
 
           ; Help message output when argument syntax is incorrect.
 
